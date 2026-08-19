@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Handyman James \u2014 System Inspection</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg: #F2EEE3; --surface: #FFFFFF; --ink: #1C2B21; --ink-muted: #5C5F55;
+    --accent: #004225; --accent-dark: #00301A; --accent-soft: #DCE5DE;
+    --success: #004225; --danger: #5A0019; --danger-soft: #EDD9DC;
+    --border: #DDD4C4; --black: #0F1C15; --gold: #D4AF37; --yellow: #FFD400;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Gill Sans", "Gill Sans MT", Calibri, "Trebuchet MS", sans-serif;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  .header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  .roofline { width: 40px; height: 40px; flex-shrink: 0; }
+  .header h1 { font-size: 21px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .header p { font-size: 12.5px; color: var(--ink-muted); margin: 2px 0 0; }
+
+  .run-panel {
+    background: var(--black); border-radius: 14px; padding: 22px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    margin-bottom: 24px;
+  }
+  .run-panel .label { color: var(--yellow); font-size: 13px; font-weight: 600; letter-spacing: 0.03em; }
+  .run-panel .sub { color: rgba(255,255,255,0.55); font-size: 11.5px; margin-top: 3px; font-family: "IBM Plex Mono", monospace; }
+  #runBtn {
+    background: var(--yellow); color: var(--black); border: none; border-radius: 10px;
+    padding: 13px 22px; font-size: 13.5px; font-weight: 700; cursor: pointer;
+    font-family: inherit; letter-spacing: 0.02em; transition: transform 0.1s;
+    flex-shrink: 0;
+  }
+  #runBtn:active { transform: scale(0.96); }
+  #runBtn:disabled { opacity: 0.5; cursor: default; }
+
+  .summary { display: none; gap: 10px; margin-bottom: 24px; }
+  .summary.visible { display: grid; grid-template-columns: 1fr 1fr 1fr; }
+  .summary .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px; text-align: center; }
+  .summary .stat .num { font-family: "IBM Plex Mono", monospace; font-size: 24px; font-weight: 700; }
+  .summary .stat .lbl { font-size: 10.5px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .summary .stat.pass .num { color: var(--success); }
+  .summary .stat.fail .num { color: var(--danger); }
+
+  .section-title {
+    font-size: 12px; font-weight: 700; color: var(--ink-muted); text-transform: uppercase;
+    letter-spacing: 0.07em; margin: 22px 0 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .section-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+  .item {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 6px; opacity: 0; transform: translateY(4px);
+    animation: slideIn 0.25s ease forwards;
+  }
+  @keyframes slideIn { to { opacity: 1; transform: translateY(0); } }
+  .item-row { display: flex; align-items: center; gap: 10px; }
+  .badge {
+    width: 20px; height: 20px; border-radius: 6px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+  }
+  .badge.pass { background: var(--accent-soft); color: var(--success); }
+  .badge.fail { background: var(--danger-soft); color: var(--danger); }
+  .item-name { font-size: 13px; font-weight: 600; flex: 1; }
+  .item-error {
+    margin-top: 8px; padding: 10px 11px; background: var(--danger-soft); border-radius: 8px;
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--danger); line-height: 1.5;
+  }
+  .item-screenshot { margin-top: 8px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+  .item-screenshot img { width: 100%; display: block; }
+
+  .empty-state {
+    text-align: center; padding: 50px 20px; color: var(--ink-muted); font-size: 13px; line-height: 1.6;
+  }
+  .setup-warning {
+    background: var(--danger-soft); color: var(--danger); border-radius: 10px; padding: 14px 16px;
+    font-size: 12.5px; line-height: 1.6; margin-bottom: 20px;
+  }
+  .setup-warning code { font-family: "IBM Plex Mono", monospace; background: rgba(90,0,25,0.1); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <svg class="roofline" viewBox="0 0 240 80"><polyline points="8,68 54,42 54,15 70,15 70,33 110,10 150,45 235,45" fill="none" stroke="#004225" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div>
+      <h1>System Inspection</h1>
+      <p>Checks the real, live backend and the real, live app \u2014 not a simulation.</p>
+    </div>
+  </div>
+
+  <div id="setupWarning" style="display:none" class="setup-warning"></div>
+
+  <div class="run-panel">
+    <div>
+      <div class="label">Full inspection</div>
+      <div class="sub" id="targetInfo">loading configuration\u2026</div>
+    </div>
+    <button id="runBtn" onclick="runInspection()">Run Inspection</button>
+  </div>
+
+  <div class="summary" id="summary">
+    <div class="stat pass"><div class="num" id="passCount">0</div><div class="lbl">Passed</div></div>
+    <div class="stat fail"><div class="num" id="failCount">0</div><div class="lbl">Failed</div></div>
+    <div class="stat"><div class="num" id="totalCount">0</div><div class="lbl">Total</div></div>
+  </div>
+
+  <div id="results">
+    <div class="empty-state" id="emptyState">Tap "Run Inspection" above to check everything \u2014 the real backend's API, and the real app running exactly as a client would see it.</div>
+  </div>
+
+</div>
+
+<script>
+let config = null;
+
+async function loadConfig() {
+  const res = await fetch('/api/config');
+  config = await res.json();
+  const targetInfo = document.getElementById('targetInfo');
+  const runBtn = document.getElementById('runBtn');
+  const warning = document.getElementById('setupWarning');
+  if (!config.configured) {
+    warning.style.display = 'block';
+    warning.innerHTML = 'Not fully set up yet. This service needs two environment variables in Render: <code>BACKEND_URL</code> and <code>FRONTEND_URL</code>, pointing at your live backend and live frontend.';
+    runBtn.disabled = true;
+    targetInfo.textContent = 'waiting on setup';
+  } else {
+    targetInfo.textContent = config.backendUrl + '  \u00b7  ' + config.frontendUrl;
+  }
+}
+
+function renderResult(sectionName, result) {
+  let section = document.getElementById('section-' + sectionName.replace(/\\s+/g, '-'));
+  if (!section) {
+    const title = document.createElement('div');
+    title.className = 'section-title';
+    title.textContent = sectionName;
+    title.id = 'title-' + sectionName.replace(/\\s+/g, '-');
+    document.getElementById('results').appendChild(title);
+    section = document.createElement('div');
+    section.id = 'section-' + sectionName.replace(/\\s+/g, '-');
+    document.getElementById('results').appendChild(section);
+  }
+  const item = document.createElement('div');
+  item.className = 'item';
+  let html = '<div class="item-row"><div class="badge ' + (result.passed ? 'pass' : 'fail') + '">' + (result.passed ? '\u2713' : '\u2715') + '</div><div class="item-name">' + result.name + '</div></div>';
+  if (!result.passed && result.error) {
+    html += '<div class="item-error">' + result.error + '</div>';
+  }
+  if (!result.passed && result.screenshot) {
+    html += '<div class="item-screenshot"><img src="data:image/png;base64,' + result.screenshot + '" /></div>';
+  }
+  item.innerHTML = html;
+  section.appendChild(item);
+}
+
+async function runInspection() {
+  document.getElementById('emptyState').style.display = 'none';
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('summary').classList.remove('visible');
+  const runBtn = document.getElementById('runBtn');
+  runBtn.disabled = true;
+  runBtn.textContent = 'Running\\u2026';
+
+  let passed = 0, failed = 0, total = 0;
+
+  const evtSource = new EventSource('/api/run-tests');
+
+  evtSource.addEventListener('result', (e) => {
+    const data = JSON.parse(e.data);
+    renderResult(data.section, data);
+    total++;
+    if (data.passed) passed++; else failed++;
+    document.getElementById('passCount').textContent = passed;
+    document.getElementById('failCount').textContent = failed;
+    document.getElementById('totalCount').textContent = total;
+    document.getElementById('summary').classList.add('visible');
+  });
+
+  evtSource.addEventListener('done', (e) => {
+    evtSource.close();
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run Inspection';
+  });
+
+  evtSource.addEventListener('fatal-error', (e) => {
+    const data = JSON.parse(e.data);
+    const item = document.createElement('div');
+    item.className = 'item';
+    item.innerHTML = '<div class="item-row"><div class="badge fail">\u2715</div><div class="item-name">Inspection itself crashed</div></div><div class="item-error">' + data.message + '</div>';
+    document.getElementById('results').appendChild(item);
+    evtSource.close();
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run Inspection';
+  });
+
+  evtSource.onerror = () => {
+    evtSource.close();
+    runBtn.disabled = false;
+    runBtn.textContent = 'Run Inspection';
+  };
+}
+
+loadConfig();
+</script>
+</body>
+</html>
