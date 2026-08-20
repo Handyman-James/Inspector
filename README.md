@@ -5,13 +5,16 @@ simulation of either. Open it, tap "Run Inspection," and watch results stream in
 live, grouped into two sections:
 
 - **Backend API** \u2014 hits real endpoints directly (auth, clients, jobs, invoices,
-  estimates, tax summary, client relationships, message dispatch) and confirms
-  they behave correctly.
+  estimates, tax summary, client relationships, message dispatch, batch client
+  import) and confirms they behave correctly.
 - **Browser (live app)** \u2014 launches a real, headless browser and clicks through
   the actual deployed frontend the way a real person would: logs in for real,
-  opens each tab, and specifically re-checks the Route screen's map for visible
-  content \u2014 a direct regression test for the black-map bug found and fixed
-  earlier in this project.
+  opens each tab, specifically re-checks the Route screen's map for visible
+  content (a direct regression test for the black-map bug found and fixed
+  earlier), and runs a full, genuine CSV import end to end \u2014 uploading a real
+  file with deliberately non-standard column headers, manually mapping them
+  through the app's own UI, confirming the import, and verifying the client
+  actually appears in the client list afterward.
 
 Any failure shows its exact error message. Browser-test failures also capture a
 screenshot at the moment of failure, shown inline \u2014 useful for a rendering

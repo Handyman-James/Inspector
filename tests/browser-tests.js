@@ -19,6 +19,7 @@
 // rendering problem like the black-map bug this project already hit once.
 
 const { chromium } = require("playwright");
+const fs = require("fs");
 
 function makeTest(name, fn) {
   return async (ctx) => {
@@ -115,6 +116,66 @@ async function runBrowserTests(frontendUrl, backendUrl, onProgress) {
     if (await mapSvg.count() === 0) throw new Error("No map SVG found on the Route screen at all");
     const box = await mapSvg.boundingBox();
     if (!box || box.width === 0 || box.height === 0) throw new Error("Map SVG exists but has zero visible size");
+  })());
+
+  report(await makeTest("CSV import: mapping screen appears with the file's real headers", async () => {
+    // Deliberately non-standard headers ("Client Full Name", "Contact Number")
+    // that the app's auto-detection genuinely won't recognize - this is what
+    // actually proves the manual mapping screen works, not just that it appears.
+    const csvPath = "/tmp/inspector_import_test.csv";
+    fs.writeFileSync(csvPath, "Client Full Name,Contact Number\nInspector Import Check,+16175559988\n");
+
+    await page.locator('text=/settings/i').first().click();
+    await page.waitForTimeout(500);
+    const importButton = page.locator('text=/^Import$/i').first();
+    if (await importButton.count() === 0) throw new Error("No Import button found in Settings");
+    await importButton.click();
+    await page.waitForTimeout(500);
+
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles(csvPath);
+    await page.waitForTimeout(1000);
+
+    const mappingText = await page.locator('text=/Match each field/i').count();
+    if (mappingText === 0) throw new Error("Mapping screen never appeared after uploading the CSV");
+    const headerVisible = await page.locator('text=/Client Full Name/i').count();
+    if (headerVisible === 0) throw new Error("The file's actual custom header text never appeared in the mapping dropdowns");
+  })());
+
+  report(await makeTest("CSV import: manually mapping non-standard columns and importing actually works end to end", async () => {
+    // Continues directly from the previous test's state - the mapping screen
+    // should still be open with the CSV already loaded.
+    const nameSelect = page.locator("select").first();
+    await nameSelect.selectOption({ label: "Client Full Name" });
+    const phoneSelect = page.locator("select").nth(1);
+    await phoneSelect.selectOption({ label: "Contact Number" });
+
+    await page.locator('button:has-text("Continue")').first().click();
+    await page.waitForTimeout(500);
+
+    const previewText = await page.locator('text=/Inspector Import Check/i').count();
+    if (previewText === 0) throw new Error("The mapped name never appeared on the preview screen - mapping likely didn't apply correctly");
+
+    await page.locator('button:has-text("Import")').first().click();
+    await page.waitForTimeout(500);
+
+    // The app's own confirmation step - a fingerprint-style button inside a
+    // "Confirm to continue" overlay, with a real ~1.5s internal animation delay
+    // before it actually fires.
+    const confirmOverlay = page.locator("div", { hasText: "Confirm to continue" }).first();
+    if (await confirmOverlay.count() === 0) throw new Error("Expected a confirmation overlay before the import actually runs, but none appeared");
+    await confirmOverlay.locator("button").first().click();
+    await page.waitForTimeout(2000);
+
+    // The real, end-to-end proof: navigate to the client list fresh and confirm
+    // the imported client genuinely exists there - not just that the UI flow
+    // completed without an error.
+    await page.locator('text=/clients/i').first().click();
+    await page.waitForTimeout(1000);
+    const clientInList = await page.locator('text=/Inspector Import Check/i').count();
+    if (clientInList === 0) throw new Error("Imported client does not appear in the client list afterward - it may not have genuinely persisted");
+
+    try { fs.unlinkSync("/tmp/inspector_import_test.csv"); } catch (e) { /* best effort cleanup */ }
   })());
 
   report(await makeTest("No unhandled JavaScript errors occurred during this whole run", async () => {

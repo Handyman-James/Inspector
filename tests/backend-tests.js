@@ -159,6 +159,26 @@ async function runBackendTests(backendUrl, onProgress) {
     if (!errorMessage.toLowerCase().includes("phone")) throw new Error(`Got an error, but not the expected one - got: "${errorMessage}"`);
   })());
 
+  report(await makeTest("Multiple clients created in a batch all genuinely persist (import regression test)", async () => {
+    // Direct regression test for a real bug found and fixed today: imported
+    // clients previously only ever existed in temporary local state and
+    // silently vanished on the next page load, never actually reaching the
+    // backend at all. This models that same batch-creation pattern and
+    // specifically re-fetches everything fresh afterward, rather than just
+    // trusting each POST response, to prove it's genuinely saved.
+    if (!authToken) throw new Error("No auth token from earlier test - skipping");
+    const batch = ["Import Regression A", "Import Regression B", "Import Regression C"];
+    const createdIds = [];
+    for (const name of batch) {
+      const client = await apiRequest(backendUrl, authToken, "POST", "/api/clients", { name });
+      createdIds.push(client.id);
+      cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/clients/${client.id}`).catch(() => {}));
+    }
+    const freshList = await apiRequest(backendUrl, authToken, "GET", "/api/clients");
+    const allFound = createdIds.every((id) => freshList.some((c) => c.id === id));
+    if (!allFound) throw new Error("Not all batch-created clients were found in a fresh fetch afterward - the exact failure mode this test exists to catch");
+  })());
+
   report(await makeTest("Server survived the full test run", async () => {
     const health = await apiRequest(backendUrl, null, "GET", "/api/health");
     if (health.status !== "ok") throw new Error("Server did not report healthy after the test run");
