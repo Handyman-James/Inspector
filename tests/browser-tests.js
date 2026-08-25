@@ -85,6 +85,30 @@ async function runBrowserTests(frontendUrl, backendUrl, onProgress) {
     if (stillOnLogin) throw new Error("Still showing the login form after submitting - login likely failed");
   })());
 
+  // After login the app shows an animated greeting/entrance splash (logo, the
+  // day's counts, "tap to continue") for a couple of seconds BEFORE the main
+  // tabbed UI appears. This screen was added after the Inspector was first
+  // written. If we start looking for tabs while it's still up, every tab check
+  // fails with "couldn't find" - exactly the cascade seen otherwise. So dismiss
+  // it explicitly (it's tap-to-skip) and wait for a real tab to appear before
+  // continuing.
+  await page.waitForTimeout(500);
+  try {
+    // Tapping anywhere on the splash skips it. Click the greeting text if present,
+    // otherwise click the page body; then give the fade-out a moment.
+    const splash = page.locator('text=/tap to continue|here\'s your day|good morning|good afternoon|good evening/i').first();
+    if (await splash.count() > 0) {
+      await splash.click({ force: true }).catch(() => {});
+    } else {
+      await page.mouse.click(10, 10).catch(() => {});
+    }
+  } catch (e) { /* best effort */ }
+  // Wait until a genuine bottom-tab ("Today") is actually present, or up to ~5s
+  // (covers the splash's own auto-advance timeout even if the tap didn't land).
+  try {
+    await page.waitForSelector('text=/today/i', { timeout: 5000 });
+  } catch (e) { /* the tab checks below will report precisely if it's still missing */ }
+
   const screensToCheck = [
     { name: "Today", selector: 'text=/today/i' },
     { name: "Clients", selector: 'text=/clients/i' },
