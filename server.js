@@ -1,6 +1,6 @@
 const express = require("express");
 const path = require("path");
-const { runBackendTests } = require("./tests/backend-tests");
+const { runBackendTests, runRateLimitProbe } = require("./tests/backend-tests");
 const { runBrowserTests } = require("./tests/browser-tests");
 
 const app = express();
@@ -39,7 +39,13 @@ app.get("/api/run-tests", async (req, res) => {
     sendEvent("section-start", { section: "Browser (live app)" });
     const browserResults = await runBrowserTests(FRONTEND_URL, BACKEND_URL, (result) => sendEvent("result", { section: "Browser (live app)", ...result }));
 
-    const all = [...backendResults, ...browserResults];
+    // The rate-limit probe runs dead last: it deliberately trips the login limiter,
+    // which would block correct logins for the rest of the window, so nothing that
+    // needs to log in can come after it.
+    sendEvent("section-start", { section: "Security (final)" });
+    const rateLimitResults = await runRateLimitProbe(BACKEND_URL, (result) => sendEvent("result", { section: "Security (final)", ...result }));
+
+    const all = [...backendResults, ...browserResults, ...rateLimitResults];
     const passed = all.filter((r) => r.passed).length;
     sendEvent("done", { total: all.length, passed, failed: all.length - passed });
   } catch (err) {

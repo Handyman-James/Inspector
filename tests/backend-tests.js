@@ -325,6 +325,45 @@ async function runBackendTests(backendUrl, onProgress) {
     cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/jobs/${healed.id}`).catch(() => {}));
   })());
 
+  // ---------------------------------------------------------------------------
+  // SECURITY HARDENING
+  // Confirms the protective measures are actually live on the real backend, so a
+  // future deploy can't silently drop them. Uses raw fetch (not the throwing
+  // apiRequest helper) because these tests deliberately expect certain failures
+  // (429 Too Many Requests, a blocked cross-origin request).
+  // ---------------------------------------------------------------------------
+
+  report(await makeTest("Security headers are present (helmet is active)", async () => {
+    const res = await fetch(`${backendUrl}/api/health`);
+    // helmet sets these by default; their presence is a good proxy for it being on.
+    const frame = res.headers.get("x-frame-options");
+    const noSniff = res.headers.get("x-content-type-options");
+    if (!frame && !noSniff) throw new Error("No security headers found - helmet may not be active");
+    if (!noSniff) throw new Error("Missing X-Content-Type-Options header (MIME-sniffing protection)");
+  })());
+
+  report(await makeTest("CORS is locked to the real frontend, not open to every origin", async () => {
+    // An allowed origin should be echoed back in Access-Control-Allow-Origin; a
+    // random origin should NOT be. If a random origin is echoed, CORS is wide open.
+    const evil = await fetch(`${backendUrl}/api/health`, { headers: { Origin: "https://definitely-not-allowed.example.com" } });
+    const evilAllow = evil.headers.get("access-control-allow-origin");
+    if (evilAllow === "https://definitely-not-allowed.example.com" || evilAllow === "*") {
+      throw new Error("CORS echoes back an arbitrary origin - it is open to every website");
+    }
+  })());
+
+  report(await makeTest("Protected endpoints reject requests with no token", async () => {
+    // A core guarantee: without a valid token, data endpoints must refuse. This
+    // would catch an accidental removal of the auth middleware.
+    const res = await fetch(`${backendUrl}/api/clients`);
+    if (res.status !== 401) throw new Error(`Expected 401 for an unauthenticated request to /api/clients, got ${res.status}`);
+  })());
+
+  report(await makeTest("Protected endpoints reject a forged/garbage token", async () => {
+    const res = await fetch(`${backendUrl}/api/clients`, { headers: { Authorization: "Bearer not-a-real-token" } });
+    if (res.status !== 401) throw new Error(`Expected 401 for a forged token, got ${res.status}`);
+  })());
+
   report(await makeTest("Server survived the full test run", async () => {
     const health = await apiRequest(backendUrl, null, "GET", "/api/health");
     if (health.status !== "ok") throw new Error("Server did not report healthy after the test run");
@@ -338,4 +377,31 @@ async function runBackendTests(backendUrl, onProgress) {
   return results;
 }
 
-module.exports = { runBackendTests };
+// Runs LAST of everything (after the browser suite), because tripping the login
+// rate limiter blocks even correct logins for the rest of the window - so it must
+// not run before anything that needs to log in. Fires more than the failed-login
+// limit and confirms the backend starts returning 429 rather than accepting
+// unlimited guesses. Uses a junk account so it only ever exercises the limiter.
+async function runRateLimitProbe(backendUrl, onProgress) {
+  const result = await (async () => {
+    try {
+      let sawTooMany = false;
+      const junkEmail = `ratelimit-probe-${Date.now()}@internal.test`;
+      for (let i = 0; i < 15; i++) {
+        const res = await fetch(`${backendUrl}/api/auth/login`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: junkEmail, password: "definitely-wrong" }),
+        });
+        if (res.status === 429) { sawTooMany = true; break; }
+      }
+      if (!sawTooMany) throw new Error("Login accepted 15 rapid failed attempts without ever rate-limiting - brute-force protection may be off");
+      return { name: "Login is rate-limited against brute force", passed: true };
+    } catch (err) {
+      return { name: "Login is rate-limited against brute force", passed: false, error: err.message || String(err) };
+    }
+  })();
+  if (onProgress) onProgress(result);
+  return [result];
+}
+
+module.exports = { runBackendTests, runRateLimitProbe };

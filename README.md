@@ -30,6 +30,17 @@ Any failure shows its exact error message. Browser-test failures also capture a
 screenshot at the moment of failure, shown inline \u2014 useful for a rendering
 problem, not just a logic one.
 
+## Security checks
+
+The inspection also confirms the backend's protective measures are actually live,
+so a future deploy can't silently drop them: that security headers are present
+(helmet), that CORS is locked to the real frontend rather than open to every
+website, that protected endpoints reject requests with no token and with a forged
+token, and \u2014 as the very last check of the whole run \u2014 that repeated failed
+logins get rate-limited. The rate-limit probe runs dead last on purpose: it
+deliberately trips the login limiter, which would block even correct logins for
+the rest of the window, so nothing that needs to log in can run after it.
+
 ## What gets created and cleaned up
 
 Every test run registers its own, fresh, disposable test account and creates
