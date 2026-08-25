@@ -6,12 +6,22 @@ live, grouped into two sections:
 
 - **Backend API** \u2014 hits real endpoints directly (auth, clients, jobs, invoices,
   estimates, tax summary, client relationships, message dispatch, batch client
-  import) and confirms they behave correctly.
+  import) and confirms they behave correctly. Also covers the whole **events /
+  service-request system** added later: creating an event with per-recipient
+  tokens, a token resolving to the right client automatically, bogus tokens being
+  rejected, a client accepting via their token creating a real routable job on the
+  owner's schedule (and not creating a duplicate on a double-submit), editing an
+  event without wiping responses, the client-reply path still working after an
+  edit, deleting an event, geocoded client positions persisting across a reload
+  (so the app doesn't re-geocode every login), and the self-healing job backfill
+  recovering an accepted response that somehow has no job yet. Each of these is a
+  direct regression test for a real bug found and fixed.
 - **Browser (live app)** \u2014 launches a real, headless browser and clicks through
   the actual deployed frontend the way a real person would: logs in for real,
-  opens each tab, specifically re-checks the Route screen's map for visible
-  content (a direct regression test for the black-map bug found and fixed
-  earlier), and runs a full, genuine CSV import end to end \u2014 uploading a real
+  opens each tab, confirms both "Add job" and "Add event" exist on Today and that
+  the event screen actually opens, specifically re-checks the Route screen's map
+  for visible content (a direct regression test for the black-map bug found and
+  fixed earlier), and runs a full, genuine CSV import end to end \u2014 uploading a real
   file with deliberately non-standard column headers, manually mapping them
   through the app's own UI, confirming the import, and verifying the client
   actually appears in the client list afterward.

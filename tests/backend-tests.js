@@ -179,6 +179,152 @@ async function runBackendTests(backendUrl, onProgress) {
     if (!allFound) throw new Error("Not all batch-created clients were found in a fresh fetch afterward - the exact failure mode this test exists to catch");
   })());
 
+  // ---------------------------------------------------------------------------
+  // EVENTS / SERVICE-REQUESTS SYSTEM
+  // The whole event flow built after this Inspector was first written: creating an
+  // event, per-recipient tokens, tokenised client responses, server-side job
+  // creation on acceptance, the accepted/declined breakdown, editing, deleting,
+  // and the self-healing job backfill. This is the area that had the most bugs, so
+  // it gets the most coverage.
+  // ---------------------------------------------------------------------------
+  let eventId = null;
+  let eventClientId = null;
+  let eventClientId2 = null;
+
+  report(await makeTest("Event (service request) can be created with per-recipient tokens", async () => {
+    if (!authToken) throw new Error("No auth token from earlier test - skipping");
+    const ec1 = await apiRequest(backendUrl, authToken, "POST", "/api/clients", { name: "Event Client One", address: "1 Test St" });
+    const ec2 = await apiRequest(backendUrl, authToken, "POST", "/api/clients", { name: "Event Client Two", address: "2 Test St" });
+    eventClientId = ec1.id; eventClientId2 = ec2.id;
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/clients/${ec1.id}`).catch(() => {}));
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/clients/${ec2.id}`).catch(() => {}));
+    const ev = await apiRequest(backendUrl, authToken, "POST", "/api/service-requests", {
+      groupName: "Test Group", serviceIds: ["r1", "r2"], dutyDate: "2026-12-30", message: "Inspector event",
+      responses: [{ clientId: ec1.id, respondedAt: null, selections: [] }, { clientId: ec2.id, respondedAt: null, selections: [] }],
+    });
+    if (!ev.id) throw new Error("No id returned for created event");
+    eventId = ev.id;
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/service-requests/${ev.id}`).catch(() => {}));
+    const tokens = (ev.responses || []).map((r) => r.token);
+    if (tokens.length !== 2 || !tokens[0] || !tokens[1]) throw new Error("Server did not generate a token per recipient");
+    if (tokens[0] === tokens[1]) throw new Error("Recipient tokens are not unique - a client could respond as another");
+  })());
+
+  report(await makeTest("Response token identifies the right client automatically", async () => {
+    if (!eventId) throw new Error("No event from earlier test - skipping");
+    const ev = await apiRequest(backendUrl, authToken, "GET", "/api/service-requests");
+    const mine = ev.find((sr) => sr.id === eventId);
+    const token = mine.responses.find((r) => r.clientId === eventClientId).token;
+    // Public token lookup - no auth, mimicking a client tapping their link.
+    const info = await apiRequest(backendUrl, null, "GET", `/api/public/respond/${token}`);
+    if (info.clientId !== eventClientId) throw new Error("Token resolved to the wrong client");
+    if (info.clientName !== "Event Client One") throw new Error("Token lookup did not return the client's name");
+    if (info.alreadyResponded !== false) throw new Error("Fresh response wrongly reported as already responded");
+  })());
+
+  report(await makeTest("Bogus response token is rejected", async () => {
+    let rejected = false;
+    try { await apiRequest(backendUrl, null, "GET", "/api/public/respond/deadbeefdeadbeefdeadbeefdeadbeef"); }
+    catch (e) { rejected = true; }
+    if (!rejected) throw new Error("A made-up token was accepted - it should be rejected");
+  })());
+
+  report(await makeTest("Accepting via token creates a routable job on the owner's schedule", async () => {
+    if (!eventId) throw new Error("No event from earlier test - skipping");
+    const ev = await apiRequest(backendUrl, authToken, "GET", "/api/service-requests");
+    const mine = ev.find((sr) => sr.id === eventId);
+    const token = mine.responses.find((r) => r.clientId === eventClientId).token;
+    // Client accepts one service via their token, sending selection details.
+    await apiRequest(backendUrl, null, "PUT", `/api/public/respond/${token}`, {
+      selections: ["r1"], selectionDetails: [{ id: "r1", name: "Diagnostic visit", price: 65 }],
+    });
+    // The owner should now have a booked job for that client on the event date -
+    // a direct regression test for the bug where an acceptance created no job and
+    // the route button never appeared.
+    const jobs = await apiRequest(backendUrl, authToken, "GET", "/api/jobs");
+    const booked = jobs.find((j) => j.clientId === eventClientId && j.date === "2026-12-30" && j.notes === "Booked via service request response.");
+    if (!booked) throw new Error("Accepting via token did not create a booked job - the route button would find nothing");
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/jobs/${booked.id}`).catch(() => {}));
+  })());
+
+  report(await makeTest("Accepting twice does not create a duplicate job", async () => {
+    if (!eventId) throw new Error("No event from earlier test - skipping");
+    const ev = await apiRequest(backendUrl, authToken, "GET", "/api/service-requests");
+    const mine = ev.find((sr) => sr.id === eventId);
+    const token = mine.responses.find((r) => r.clientId === eventClientId).token;
+    await apiRequest(backendUrl, null, "PUT", `/api/public/respond/${token}`, {
+      selections: ["r1"], selectionDetails: [{ id: "r1", name: "Diagnostic visit", price: 65 }],
+    });
+    const jobs = await apiRequest(backendUrl, authToken, "GET", "/api/jobs");
+    const booked = jobs.filter((j) => j.clientId === eventClientId && j.date === "2026-12-30" && j.notes === "Booked via service request response.");
+    if (booked.length !== 1) throw new Error(`Expected exactly one booked job after a double-submit, found ${booked.length}`);
+  })());
+
+  report(await makeTest("Event can be edited (date, services, message) without losing responses", async () => {
+    if (!eventId) throw new Error("No event from earlier test - skipping");
+    const ev = await apiRequest(backendUrl, authToken, "GET", "/api/service-requests");
+    const mine = ev.find((sr) => sr.id === eventId);
+    const edited = await apiRequest(backendUrl, authToken, "PUT", `/api/service-requests/${eventId}`, {
+      ...mine, dutyDate: "2026-12-31", serviceIds: ["r1", "r2", "r3"], message: "Edited by Inspector",
+    });
+    if (edited.dutyDate !== "2026-12-31") throw new Error("Edit did not change the date");
+    if (edited.serviceIds.length !== 3) throw new Error("Edit did not change the services");
+    if (edited.message !== "Edited by Inspector") throw new Error("Edit did not change the message");
+    const stillResponded = edited.responses.find((r) => r.clientId === eventClientId && r.respondedAt);
+    if (!stillResponded) throw new Error("Editing the event wiped an existing client response");
+  })());
+
+  report(await makeTest("A responses-only update still works after an edit (client reply path)", async () => {
+    if (!eventId) throw new Error("No event from earlier test - skipping");
+    // This is the exact shape the public respond flow sends; a JSON-handling bug
+    // here previously would have broken clients replying. Verify it still works
+    // and preserves the edited date rather than reverting it.
+    const ru = await apiRequest(backendUrl, authToken, "PUT", `/api/service-requests/${eventId}`, {
+      responses: [{ clientId: eventClientId2, respondedAt: new Date().toISOString(), selections: [] }],
+    });
+    if (ru.dutyDate !== "2026-12-31") throw new Error("A responses-only update reverted the edited date");
+  })());
+
+  report(await makeTest("Event can be deleted", async () => {
+    if (!eventId) throw new Error("No event from earlier test - skipping");
+    await apiRequest(backendUrl, authToken, "DELETE", `/api/service-requests/${eventId}`);
+    const ev = await apiRequest(backendUrl, authToken, "GET", "/api/service-requests");
+    if (ev.some((sr) => sr.id === eventId)) throw new Error("Event still present after delete");
+    eventId = null; // already gone; skip the cleanup delete
+  })());
+
+  report(await makeTest("Client geocoded position (geo) persists across a save and reload", async () => {
+    if (!authToken) throw new Error("No auth token from earlier test - skipping");
+    // Regression test for the 're-geocode every login' bug: geo must be stored on
+    // the backend, not just held in local state, or every login re-geocodes.
+    const c = await apiRequest(backendUrl, authToken, "POST", "/api/clients", {
+      name: "Geo Persist Client", address: "3 Test St", coords: { x: 1.5, y: -0.5 },
+      geo: { lat: 42.4467, lng: -71.227, formatted: "3 Test St" },
+    });
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/clients/${c.id}`).catch(() => {}));
+    const reloaded = (await apiRequest(backendUrl, authToken, "GET", "/api/clients")).find((x) => x.id === c.id);
+    if (!reloaded.geo || Math.abs(reloaded.geo.lat - 42.4467) > 0.0001) throw new Error("Client geo did not persist - the app would re-geocode on every login");
+  })());
+
+  report(await makeTest("Job backfill self-heals an accepted response that has no job", async () => {
+    if (!authToken) throw new Error("No auth token from earlier test - skipping");
+    // Recreate the 'stuck event' state: an accepted response with no booked job,
+    // then confirm that simply loading service-requests creates the missing job.
+    const c = await apiRequest(backendUrl, authToken, "POST", "/api/clients", { name: "Backfill Client", address: "4 Test St" });
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/clients/${c.id}`).catch(() => {}));
+    const ev = await apiRequest(backendUrl, authToken, "POST", "/api/service-requests", {
+      groupName: "Backfill Group", serviceIds: ["r1"], dutyDate: "2026-12-29",
+      responses: [{ clientId: c.id, respondedAt: new Date().toISOString(), selections: ["r1"], selectionDetails: [{ id: "r1", name: "Diagnostic visit", price: 65 }] }],
+    });
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/service-requests/${ev.id}`).catch(() => {}));
+    // Loading service-requests should trigger the backfill and create the job.
+    await apiRequest(backendUrl, authToken, "GET", "/api/service-requests");
+    const jobs = await apiRequest(backendUrl, authToken, "GET", "/api/jobs");
+    const healed = jobs.find((j) => j.clientId === c.id && j.date === "2026-12-29" && j.notes === "Booked via service request response.");
+    if (!healed) throw new Error("Backfill did not create the missing job for an accepted response");
+    cleanup.push(() => apiRequest(backendUrl, authToken, "DELETE", `/api/jobs/${healed.id}`).catch(() => {}));
+  })());
+
   report(await makeTest("Server survived the full test run", async () => {
     const health = await apiRequest(backendUrl, null, "GET", "/api/health");
     if (health.status !== "ok") throw new Error("Server did not report healthy after the test run");

@@ -104,6 +104,25 @@ async function runBrowserTests(frontendUrl, backendUrl, onProgress) {
     })());
   }
 
+  report(await makeTest("Today shows both 'Add job' and 'Add event' and the event screen opens", async () => {
+    // Regression coverage for the events feature: the two side-by-side Today
+    // buttons should both exist, and tapping "Add event" should open the event
+    // creation screen (group / services / date), not error out.
+    const todayTab = page.locator('text=/today/i').first();
+    if (await todayTab.count() > 0) { await todayTab.click(); await page.waitForTimeout(600); }
+    const addJob = page.locator('text=/add job/i').first();
+    const addEvent = page.locator('text=/add event/i').first();
+    if (await addJob.count() === 0) throw new Error("The 'Add job' button is missing from Today");
+    if (await addEvent.count() === 0) throw new Error("The 'Add event' button is missing from Today");
+    await addEvent.click();
+    await page.waitForTimeout(800);
+    const errorBoundary = await page.locator('text=/something went wrong/i').count();
+    if (errorBoundary > 0) throw new Error("The Add Event screen shows an error boundary");
+    // The event screen should surface a recipients / services notion.
+    const looksLikeEvent = await page.locator('text=/recipients|services offered|will be texted|event date/i').count();
+    if (looksLikeEvent === 0) throw new Error("Add Event screen opened but doesn't look like the event form");
+  })());
+
   report(await makeTest("Route screen's map area actually renders visible content", async () => {
     // This is a direct regression test for the specific black-map bug found and
     // fixed earlier - confirming the fallback SVG genuinely draws visible pixels,
